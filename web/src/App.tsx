@@ -47,15 +47,25 @@ export default function App() {
 
   const handleLogin = useCallback((username: string, password: string) => {
     const next = new SubsonicClient({ username, password });
-    void next.ping().then((ok) => {
-      if (ok) {
-        localStorage.setItem(CREDS_KEY, JSON.stringify({ username, password }));
-        setCreds({ username, password });
-        setClient(next);
-      } else {
-        setStatus("Login failed: wrong username or password.");
-      }
-    });
+    void next
+      .ping()
+      .then((ok) => {
+        if (ok) {
+          localStorage.setItem(CREDS_KEY, JSON.stringify({ username, password }));
+          setCreds({ username, password });
+          setClient(next);
+        } else {
+          setStatus("Login failed: wrong username or password.");
+        }
+      })
+      .catch((err: unknown) => {
+        // Network-level failure (server down/restarting) — not an auth error.
+        setStatus(
+          err instanceof Error
+            ? `Cannot reach server: ${err.message}`
+            : "Cannot reach server.",
+        );
+      });
   }, []);
 
   const handleSearch = useCallback(
@@ -103,6 +113,17 @@ export default function App() {
     },
     [client],
   );
+
+  // Audio element error handler: aborted loads (scrubbing, replacing src)
+  // are normal and must stay silent.
+  const handleAudioError = useCallback(() => {
+    const el = audioRef.current;
+    // code 1 = MEDIA_ERR_ABORTED (load replaced/aborted) — normal, stay silent.
+    if (!el || !el.error || el.error.code === 1) {
+      return;
+    }
+    setStatus("Stream failed: the item may be lending-restricted on archive.org.");
+  }, []);
 
   if (!client) {
     return <Login onLogin={handleLogin} status={status} />;
@@ -181,7 +202,13 @@ export default function App() {
       {nowPlaying && client ? (
         <footer className="sticky bottom-0 border-t bg-background/95 p-3 backdrop-blur">
           <div className="flex items-center gap-3">
-            <audio ref={audioRef} controls className="w-full" src={client.streamUrl(nowPlaying.id)} />
+            <audio
+              ref={audioRef}
+              controls
+              className="w-full"
+              src={client.streamUrl(nowPlaying.id)}
+              onError={handleAudioError}
+            />
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {nowPlaying.artist} — {nowPlaying.title}

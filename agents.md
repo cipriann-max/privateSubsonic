@@ -2,6 +2,10 @@
 
 How to work in this codebase. `README.md` covers the what; this covers the how.
 
+## Who does what
+
+- **The user runs git commits and terminal commands themselves.** The agent must not execute `git commit`, `git add`, builds, or other shell commands unless explicitly asked in the current request. Write files, fix code, and let the user run/commit.
+
 ## Layout
 
 - npm **workspaces**: `server/` (Express 5, TS, ESM/NodeNext) and `web/` (Vite, React, Tailwind v4, shadcn/ui).

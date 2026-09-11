@@ -67,7 +67,6 @@ See [.env.example](.env.example) for every variable and its default:
 | `PORT` | `4533` | HTTP listen port |
 | `LOG_LEVEL` | `info` | pino level |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `changeme` | single admin credential |
-| `AUTH_SALT` | random string | rotate to invalidate client tokens |
 | `DATABASE_PATH` | `data/privatesubsonic.db` | SQLite file (unused in v0.1) |
 | `CACHE_MAX_ENTRIES` / `CACHE_TTL_SECONDS` | `500` / `3600` | in-memory query cache |
 | `PROVIDER` | `archive-org` | provider id |

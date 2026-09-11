@@ -1,4 +1,5 @@
 import { request } from "undici";
+import { httpDispatcher } from "../../http.js";
 import { config } from "../../config.js";
 import { logger } from "../../logger.js";
 import { cached } from "../../cache.js";
@@ -26,7 +27,6 @@ import type {
 const IA_SEARCH_URL = "https://archive.org/advancedsearch.php";
 const IA_METADATA_URL = "https://archive.org/metadata";
 const AUDIO_EXTENSIONS = new Set(["mp3", "flac", "ogg", "oga", "m4a", "wav", "aac", "opus"]);
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif"]);
 
 const AUDIO_MIME: Record<string, string> = {
   mp3: "audio/mpeg",
@@ -81,9 +81,9 @@ export function first(value: string | string[] | undefined): string {
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await request(url, {
     method: "GET",
+    dispatcher: httpDispatcher,
     headersTimeout: config.providerTimeoutMs,
     bodyTimeout: config.providerTimeoutMs,
-    maxRedirections: 3,
     headers: { "user-agent": "privateSubsonic/0.1 (live provider)" },
   });
   if (res.statusCode >= 400) {
@@ -176,14 +176,6 @@ function filesToTracks(identifier: string, files: IaFile[], fallbackArtist: stri
   });
 }
 
-function findCoverFile(identifier: string, files: IaFile[]): string | null {
-  const candidates = files.filter((f) => IMAGE_EXTENSIONS.has(extensionOf(f.name)));
-  // Prefer files that look like covers/thumbs, then the first image.
-  const named = candidates.find((f) => /cover|thumb|front/i.test(f.name));
-  const chosen = named ?? candidates[0];
-  return chosen ? itemUrl(identifier, chosen.name) : null;
-}
-
 export function createArchiveOrgProvider(): Provider {
   return {
     id: "archive-org",
@@ -192,8 +184,11 @@ export function createArchiveOrgProvider(): Provider {
       const key = `ia:search:${query}:${opts.artistCount}:${opts.albumCount}:${opts.songCount}:${opts.artistOffset}:${opts.albumOffset}:${opts.songOffset}`;
       return cached(key, async () => {
         const q = query.trim().length > 0 ? query.trim() : "the";
+        // Exclude lending/protected items: their audio returns 401/403, which
+        // makes browsing feel broken. Open items stream freely (verified:
+        // open item streams 206 with Range support).
         const params = new URLSearchParams({
-          q: `mediatype:(audio) AND (${q})`,
+          q: `mediatype:(audio) AND (${q}) AND NOT access-restricted-item:true`,
           "fl[]": ["identifier", "title", "creator", "date", "downloads"],
           rows: String(Math.max(opts.artistCount, opts.albumCount, opts.songCount, 1) * 3),
           page: String(1 + Math.floor(Math.max(opts.albumOffset, opts.songOffset, opts.artistOffset) / 50)),
@@ -253,7 +248,8 @@ export function createArchiveOrgProvider(): Provider {
 
     async getStreamUrl(trackId: string): Promise<string> {
       // Track ids are "<identifier>/<filename>". Cover-art pseudo-ids get
-      // resolved to the item's first image file.
+      // resolved to archive.org's canonical image service, which always
+      // serves a thumbnail (no file-list round-trip, no 404s).
       const sep = trackId.indexOf("/");
       if (sep <= 0) {
         throw new Error(`invalid track id: ${trackId}`);
@@ -262,14 +258,7 @@ export function createArchiveOrgProvider(): Provider {
       const fileName = trackId.slice(sep + 1);
 
       if (fileName === "__cover__") {
-        const data = await cached(`ia:item:${identifier}`, async () =>
-          fetchJson<IaMetadata>(`${IA_METADATA_URL}/${encodeURIComponent(identifier)}`),
-        );
-        const cover = findCoverFile(identifier, data.files ?? []);
-        if (!cover) {
-          throw new Error(`no cover art for item: ${identifier}`);
-        }
-        return cover;
+        return `https://archive.org/services/img/${encodeURIComponent(identifier)}`;
       }
 
       // Constructing the download URL directly keeps this cheap and cacheable;

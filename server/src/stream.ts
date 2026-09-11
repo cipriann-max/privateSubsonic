@@ -1,10 +1,17 @@
 import type { Request, Response } from "express";
+import { httpDispatcher } from "./http.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 
 /**
  * Byte proxy for upstream audio (archive.org). Preserves HTTP Range handling
  * so mobile clients can scrub without the whole file being buffered.
+ *
+ * Hard rules learned the hard way:
+ * - Client disconnects are normal (skip, scrub). They must be handled as
+ *   cancellation, never as unhandled stream errors — an unhandled 'error'
+ *   event kills the whole Node process.
+ * - Upstream errors surface as 404/502 JSON, never as a crash.
  */
 
 const FORWARD_HEADERS = new Set([
@@ -23,77 +30,81 @@ export async function proxyStream(upstreamUrl: string, req: Request, res: Respon
     headers.range = range;
   }
 
-  let upstreamRes: import("undici").HttpResponse;
+  let upstreamRes: Awaited<ReturnType<typeof import("undici").request>>;
   try {
     const { request } = await import("undici");
     upstreamRes = await request(upstreamUrl, {
       method: "GET",
+      dispatcher: httpDispatcher,
       headers,
       headersTimeout: config.providerTimeoutMs,
       bodyTimeout: 0, // streams can be long-lived; do not abort mid-transfer
-      maxRedirections: 5,
     });
   } catch (err) {
     logger.warn({ err, upstreamUrl }, "upstream stream request failed");
-    res.status(502).type("application/json").send({ error: "upstream unavailable" });
+    if (!res.headersSent) {
+      res.status(502).type("application/json").send({ error: "upstream unavailable" });
+    }
     return;
   }
 
-  try {
-    const status = upstreamRes.statusCode;
-    const resHeaders: Record<string, string> = {};
-    for (const [name, value] of Object.entries(upstreamRes.headers)) {
-      const key = name.toLowerCase();
-      if (FORWARD_HEADERS.has(key) && typeof value === "string") {
-        resHeaders[key] = value;
-      }
-    }
+  const { statusCode, body } = upstreamRes;
 
-    if (status >= 400) {
-      // Surface upstream failures without leaking upstream internals.
-      const code = status === 404 || status === 403 ? 404 : 502;
-      res.status(code).type("application/json").send({ error: "upstream error" });
+  try {
+    if (statusCode >= 400) {
+      const code = statusCode === 404 || statusCode === 403 || statusCode === 401 ? 404 : 502;
+      // Attach the upstream status for debugging restricted/lending items.
+      logger.debug({ upstreamUrl, upstreamStatus: statusCode }, "upstream stream error");
+      if (!res.headersSent) {
+        res.status(code).type("application/json").send({ error: "upstream error", upstreamStatus: statusCode });
+      }
+      body.destroy();
       return;
     }
 
-    res.status(status);
-    for (const [key, value] of Object.entries(resHeaders)) {
-      res.setHeader(key, value);
+    res.status(statusCode);
+    for (const [name, value] of Object.entries(upstreamRes.headers)) {
+      const key = name.toLowerCase();
+      if (FORWARD_HEADERS.has(key) && typeof value === "string") {
+        res.setHeader(key, value);
+      }
     }
-    // Ensure caching layers do not store personalized streams.
     res.setHeader("cache-control", "no-store");
 
-    const body = upstreamRes.body;
-    res.setHeader("connection", "close");
-    await new Promise<void>((resolve, reject) => {
-      body.on("data", (chunk: Buffer) => {
-        if (!res.write(chunk)) {
-          body.pause();
-          res.once("drain", () => body.resume());
-        }
-      });
-      body.on("end", () => {
-        res.end();
-        resolve();
-      });
-      body.on("error", (err: Error) => {
-        logger.warn({ err }, "upstream body error during proxying");
-        res.destroy();
-        reject(err);
-      });
-      req.on("close", () => {
+    await new Promise<void>((resolve) => {
+      // Belt and braces: any error on either side resolves (never rejects) —
+      // responses on half-consumed streams are not recoverable and must not
+      // escalate to an unhandled 'error' event on the process.
+      const cleanup = () => {
         body.destroy();
         resolve();
+      };
+
+      body.on("error", (err: Error) => {
+        logger.debug({ err }, "upstream body error during proxying (client likely left)");
+        if (!res.writableEnded) {
+          res.destroy();
+        }
+        cleanup();
       });
+
+      req.on("error", cleanup);
+      res.on("close", () => {
+        if (!res.writableEnded) {
+          body.destroy();
+        }
+        resolve();
+      });
+
+      body.pipe(res);
     });
   } catch (err) {
     logger.warn({ err }, "error while proxying stream");
+    body.destroy();
     if (!res.headersSent) {
       res.status(502).type("application/json").send({ error: "proxy error" });
     } else {
       res.destroy();
     }
-  } finally {
-    upstreamRes.body.destroy();
   }
 }

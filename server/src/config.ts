@@ -2,6 +2,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
+/**
+ * Env file loading (Node 22+ built-in). Precedence: real environment wins,
+ * then .env.local, then .env. Files are optional; missing ones are skipped.
+ */
+for (const envFile of [".env.local", ".env"]) {
+  try {
+    process.loadEnvFile(envFile);
+  } catch {
+    // file does not exist — fine
+  }
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -15,7 +27,6 @@ const schema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   ADMIN_USER: z.string().min(1).default("admin"),
   ADMIN_PASSWORD: z.string().min(1).default("changeme"),
-  AUTH_SALT: z.string().min(1).default("changesomerandomsalt"),
   DATABASE_PATH: z.string().default("data/privatesubsonic.db"),
   CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(500),
   CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
@@ -37,7 +48,6 @@ export const config = {
   logLevel: raw.LOG_LEVEL,
   adminUser: raw.ADMIN_USER,
   adminPassword: raw.ADMIN_PASSWORD,
-  authSalt: raw.AUTH_SALT,
   databasePath: path.isAbsolute(raw.DATABASE_PATH) ? raw.DATABASE_PATH : path.resolve(APP_ROOT, raw.DATABASE_PATH),
   webDistDir: path.resolve(APP_ROOT, "web", "dist"),
   cache: {

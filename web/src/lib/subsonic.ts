@@ -59,9 +59,11 @@ function md5(input: string): string {
       else if (j < 48) { f = B ^ C ^ D; g = (3 * j + 5) % 16; }
       else { f = C ^ (B | ~D); g = (7 * j) % 16; }
       const tmp = D; D = C; C = B;
-      f = add(f, add(A, K[j]));
-      const s = S[j];
-      B = add(B, add((f << s) | (f >>> (32 - s)), m[g]!));
+      // RFC 1321: B = B + rotl(F + A + K[i] + M[g], S[i]); M must be added
+      // BEFORE the rotation.
+      f = add(f, add(A, add(K[j]!, m[g]!)));
+      const s = S[j]!;
+      B = add(B, (f << s) | (f >>> (32 - s)));
       A = tmp;
     }
     a = add(a, A); b = add(b, B); c = add(c, C); d = add(d, D);
