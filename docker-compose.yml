@@ -1,0 +1,17 @@
+services:
+  privatesubsonic:
+    build: .
+    image: privatesubsonic:latest
+    container_name: privatesubsonic
+    restart: unless-stopped
+    ports:
+      - "4533:4533"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4533/rest/ping.view?userName=healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s

@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# sqlite data (bind-mount target lives outside the repo, but be safe)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.swp
+
+# shadcn/ui local state
+components.json.bak
