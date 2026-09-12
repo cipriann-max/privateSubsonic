@@ -5,13 +5,13 @@ services:
     container_name: privatesubsonic
     restart: unless-stopped
     ports:
-      - "4533:4533"
+      - "3000:3000"
     env_file:
       - .env
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4533/rest/ping.view?userName=healthcheck"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/rest/ping.view?userName=healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 10s

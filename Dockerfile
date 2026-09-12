@@ -23,7 +23,7 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=4533
+ENV PORT=3000
 # better-sqlite3 native module: install build tools once here (image builds from source
 # only if a prebuilt binary is unavailable; keep python3/make/g++ for that path)
 RUN apk add --no-cache python3 make g++ tini
@@ -39,7 +39,7 @@ RUN cd server && npm install --omit=dev --ignore-scripts && cd .. && rm -rf serv
 
 RUN mkdir -p /app/data
 VOLUME /app/data
-EXPOSE 4533
+EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:${PORT}/rest/ping.view?userName=healthcheck || exit 1

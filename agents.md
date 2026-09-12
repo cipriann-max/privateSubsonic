@@ -15,6 +15,7 @@ How to work in this codebase. `README.md` covers the what; this covers the how.
 ## Server conventions
 
 - **Modules are ESM with `.js` import specifiers** (`import { x } from "./x.js"` pointing at `.ts` files). This is NodeNext, not a typo. Do not drop the extensions.
+- **Env loading is anchored to APP_ROOT** (`src/config.ts` resolves the repo root from `import.meta.url`, then loads `.env.local`/`.env` from there). Never use `process.loadEnvFile` with a relative path — npm workspaces run scripts with the workspace dir as cwd, so relative env files silently don't load. Deployment target is **Coolify with railpack**: it runs `npm run build` then `npm start` from the root package.json and injects `PORT` (default 3000). Don't hardcode ports anywhere else.
 - **Config** flows through `src/config.ts` (zod-validated env). Never read `process.env` elsewhere.
 - **Logging** is pino (`src/logger.ts`). Never `console.*` — ESLint enforces it. Keep archive.org failures at `warn`/`debug`; they are common and non-fatal.
 - **Auth**: all `/rest/*` handlers go through `authOrError` in `src/subsonic/router.ts`. Never add a route that bypasses `verifyCredentials` (the health endpoints live outside `/rest`).

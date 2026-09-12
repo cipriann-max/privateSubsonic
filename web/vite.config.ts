@@ -14,7 +14,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/rest": "http://localhost:4533",
+      "/rest": `http://localhost:${process.env.PORT ?? 3000}`,
     },
   },
   build: {

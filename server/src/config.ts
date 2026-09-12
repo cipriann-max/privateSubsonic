@@ -2,28 +2,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /**
- * Env file loading (Node 22+ built-in). Precedence: real environment wins,
- * then .env.local, then .env. Files are optional; missing ones are skipped.
+ * Repo root. Two levels up is correct in both layouts: dev (server/src/…)
+ * and the container (server/dist/… under /app).
+ */
+export const APP_ROOT = path.resolve(__dirname, "..", "..");
+
+/**
+ * Env file loading (Node 22+ built-in), anchored to APP_ROOT so it works
+ * regardless of cwd (npm workspaces run scripts with the workspace as cwd).
+ * Precedence: real environment wins, then .env.local, then .env. Files are
+ * optional; missing ones are skipped.
  */
 for (const envFile of [".env.local", ".env"]) {
   try {
-    process.loadEnvFile(envFile);
+    process.loadEnvFile(path.join(APP_ROOT, envFile));
   } catch {
     // file does not exist — fine
   }
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-/**
- * Root of the deployed app. In dev this is the repo root; in Docker the
- * dist layout keeps the same relative depth (dist/config.js -> .. = /app).
- */
-export const APP_ROOT = path.resolve(__dirname, "..");
-
 const schema = z.object({
-  PORT: z.coerce.number().int().positive().default(4533),
+  PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   ADMIN_USER: z.string().min(1).default("admin"),
   ADMIN_PASSWORD: z.string().min(1).default("changeme"),

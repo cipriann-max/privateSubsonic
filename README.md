@@ -37,7 +37,7 @@ accepted for picky clients.
 ```bash
 npm install
 cp .env.example .env       # adjust credentials
-npm run dev                # server on :4533, web on :5173 (proxied)
+npm run dev                # server on :3000, web on :5173 (proxied)
 ```
 
 ## Production (Docker / Coolify)
@@ -47,7 +47,7 @@ cp .env.example .env       # set ADMIN_PASSWORD and AUTH_SALT
 docker compose up -d --build
 ```
 
-- Listens on port **4533**.
+- Listens on the `PORT` env var (default **3000**; Coolify injects it automatically).
 - Bind-mount a host directory to `/app/data` (compose does this at `./data`).
 - The SQLite file is bootstrapped at startup but unused in v0.1; later
   versions may persist state there without changing deployment.
@@ -76,7 +76,7 @@ See [.env.example](.env.example) for every variable and its default:
 
 | Field | Value |
 | --- | --- |
-| Server URL | `http://your-host:4533` |
+| Server URL | `http://your-host:3000` (or your Coolify domain) |
 | Username | `ADMIN_USER` |
 | Password | `ADMIN_PASSWORD` (clients use the token scheme automatically) |
 
@@ -115,6 +115,7 @@ Then register it in `providers/index.ts`. No plugin loader, no manifest.
 | --- | --- |
 | `npm run dev` | server + web concurrently (dev) |
 | `npm run build` | build server (`tsc`) and web (`vite build`) |
+| `npm start` | run the built server (what Coolify/railpack executes) |
 | `npm test` | server unit tests (vitest) |
 | `npm run lint` | eslint for both workspaces |
 
