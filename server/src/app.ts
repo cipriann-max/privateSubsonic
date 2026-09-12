@@ -1,7 +1,7 @@
 import path from "node:path";
 import compression from "compression";
 import express, { static as serveStatic, type Request, type Response, type NextFunction } from "express";
-import pinoHttp from "pino-http";
+import { pinoHttp } from "pino-http";
 import { existsSync } from "node:fs";
 import { config } from "./config.js";
 import { logger } from "./logger.js";

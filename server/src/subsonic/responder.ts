@@ -17,7 +17,9 @@ const xmlBuilder = new XMLBuilder({
   ignoreAttributes: false,
   format: true,
   indentBy: "  ",
-  suppressEmptyBooleanElements: false,
+  // Render booleans as explicit `="true"`/`="false"` attributes; Subsonic
+  // clients expect attribute values, not bare attribute names.
+  suppressBooleanAttributes: false,
 });
 
 export type ResponseFormat = "json" | "xml" | "jsonp";
