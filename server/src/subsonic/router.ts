@@ -315,5 +315,7 @@ function idToQuery(id: string): string {
 
 /** Cover art ids are album ids; derive the file id for the item's first image. */
 function coverArtIdToStreamId(id: string): string {
-  return `${id}::__cover__`;
+  // getStreamUrl splits on "/": "<identifier>/__cover__" resolves to the
+  // item's canonical image via archive.org services/img.
+  return `${id}/__cover__`;
 }
