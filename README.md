@@ -21,9 +21,11 @@ Symfonium, hit play, and it plays.
 ### Explicitly out of scope for v0.1
 
 Fingerprinting, tagging, uploads, local file libraries, caching beyond the
-in-memory query cache, persistent indexing, radio, multi-provider aggregation,
-and user accounts beyond a single admin. All deferred — the provider interface
-is kept clean so a second provider later is a new file, not a refactor.
+in-memory query cache, persistent indexing, radio, and multi-provider
+aggregation. User accounts are supported (see *Users and first run*), but
+per-user libraries, sharing, and roles beyond admin/user are not. All deferred —
+the provider interface is kept clean so a second provider later is a new file,
+not a refactor.
 
 ## The OpenSubsonic surface (v0.1)
 
@@ -37,38 +39,64 @@ accepted for picky clients.
 
 ```bash
 npm install
-cp .env.example .env       # adjust credentials
+cp .env.example .env       # optional; all values have defaults
 npm run dev                # server on :3000, web on :5173 (proxied)
 ```
+
+On first visit the app asks you to create the admin account (see *Users and
+first run* below).
 
 ## Production (Docker / Coolify)
 
 ```bash
-cp .env.example .env       # set ADMIN_PASSWORD and AUTH_SALT
+cp .env.example .env       # optional; all values have defaults
 docker compose up -d --build
 ```
 
 - Listens on the `PORT` env var (default **3000**; Coolify injects it automatically).
+- Serves the built web UI from `web/dist`. In development this is skipped so the
+  server never shadows Vite with a stale build (override with `SERVE_WEB=true`).
 - Bind-mount a host directory to `/app/data` (compose does this at `./data`).
-- The SQLite file is bootstrapped at startup but unused in v0.1; later
-  versions may persist state there without changing deployment.
+  This directory holds the SQLite file with the `users` table — persist it or
+  you lose your accounts.
 - Health check: `GET /healthz` (also `GET /rest/ping`).
 
 ### Coolify
 
-Create a new resource from a **Dockerfile** (this repo), set env vars from
-`.env.example`, and mount a volume at `/app/data`. That's it.
+Create a new resource from a **Dockerfile** (this repo), set optional env vars
+from `.env.example`, and mount a volume at `/app/data`. That's it. Then open the
+site and create the admin account — it is not read from the environment.
+
+## Users and first run
+
+There are no credentials in the environment. On first access the web UI detects
+that no users exist and asks you to **create the admin account**; that admin can
+then add and remove users and change passwords from the **Users** section of the
+side nav. The `users` table in SQLite is the only source of authentication.
+
+> **Breaking change:** `ADMIN_USER` / `ADMIN_PASSWORD` are ignored. Deployments
+> upgrading from an earlier version must create the admin account in the browser
+> once after deploying (existing data is unaffected — SQLite previously held no
+> user data).
+
+### Security notes
+
+Passwords are stored as supplied, not hashed. The Subsonic token scheme is
+`t = md5(password + salt)`, which the server must compute to authenticate any
+Subsonic client, so a one-way hash would break every client. This is the same
+posture the old `ADMIN_PASSWORD` env var had; treat the SQLite file as a secret
+and restrict who can read it.
 
 ## Configuration
 
-See [.env.example](.env.example) for every variable and its default:
+See [.env.example](.env.example) for every variable and its default. Most are
+optional — `PORT` is the only one a host normally sets.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `4533` | HTTP listen port |
+| `PORT` | `3000` | HTTP listen port |
 | `LOG_LEVEL` | `info` | pino level |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `changeme` | single admin credential |
-| `DATABASE_PATH` | `data/privatesubsonic.db` | SQLite file (unused in v0.1) |
+| `DATABASE_PATH` | `data/privatesubsonic.db` | SQLite file (holds the `users` table) |
 | `CACHE_MAX_ENTRIES` / `CACHE_TTL_SECONDS` | `500` / `3600` | in-memory query cache |
 | `PROVIDER` | `archive-org` | provider id |
 | `PROVIDER_TIMEOUT_MS` | `15000` | upstream timeout |
@@ -78,8 +106,8 @@ See [.env.example](.env.example) for every variable and its default:
 | Field | Value |
 | --- | --- |
 | Server URL | `http://your-host:3000` (or your Coolify domain) |
-| Username | `ADMIN_USER` |
-| Password | `ADMIN_PASSWORD` (clients use the token scheme automatically) |
+| Username | a user created in the app |
+| Password | that user's password (clients use the token scheme automatically) |
 
 Tested with the standard flow: `ping` → `search3` → `getAlbum` → `stream`.
 
@@ -91,10 +119,13 @@ server/          Express 5 + TypeScript (ESM, NodeNext)
   src/subsonic/providers/   provider contract + archive-org implementation
   src/stream.ts    byte proxy with Range support
   src/cache.ts     LRU + TTL query cache (lru-cache)
-  src/db.ts        SQLite bootstrap (better-sqlite3, unused in v0.1)
+  src/db.ts        SQLite bootstrap + users-table migration (better-sqlite3)
+  src/users.ts     user store (source of truth for authentication)
+  src/auth.ts      shared auth for /rest and /api (Subsonic token scheme)
+  src/api.ts       JSON management API (setup, users)
 web/             Vite + React + Tailwind v4 + shadcn/ui
-  src/lib/subsonic.ts   OpenSubsonic client (salt+MD5 token auth)
-  src/App.tsx           login → search → album → play
+  src/lib/subsonic.ts   OpenSubsonic client + /api management client
+  src/App.tsx           setup → login → { search | users } with side nav
 ```
 
 ### Provider contract

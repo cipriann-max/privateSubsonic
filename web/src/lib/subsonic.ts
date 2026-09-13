@@ -2,6 +2,9 @@
  * Minimal OpenSubsonic client for the bundled web player.
  * Talks to same-origin /rest (dev: proxied by Vite; prod: served by Express).
  * Auth: salt + md5 token scheme, credentials supplied by the operator in the UI.
+ *
+ * The same credentials drive the JSON management API under /api; see
+ * ApiClient below.
  */
 
 // MD5 is required by the Subsonic token scheme; a small inline implementation
@@ -196,6 +199,96 @@ export interface Track {
   track?: number;
   contentType?: string;
   suffix?: string;
+}
+
+export type Role = "admin" | "user";
+
+export interface ManagedUser {
+  username: string;
+  role: Role;
+  createdAt: string;
+}
+
+/**
+ * JSON management API. Reuses the Subsonic token scheme (u/t/s) with the
+ * logged-in credentials, so no separate session is needed.
+ */
+export class ApiClient {
+  private readonly baseUrl: string;
+  private readonly username: string;
+  private readonly password: string;
+
+  constructor(opts: SubsonicClientOptions) {
+    this.baseUrl = (opts.baseUrl ?? "").replace(/\/$/, "");
+    this.username = opts.username;
+    this.password = opts.password;
+  }
+
+  private signedParams(): URLSearchParams {
+    const salt = Math.random().toString(36).slice(2, 12);
+    const token = md5(this.password + salt);
+    return new URLSearchParams({ u: this.username, t: token, s: salt });
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const separator = path.includes("?") ? "&" : "?";
+    const url = `${this.baseUrl}/api${path}${separator}${this.signedParams().toString()}`;
+    const res = await fetch(url, {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    const data = text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {};
+    if (!res.ok) {
+      throw new Error(typeof data.error === "string" ? data.error : `request failed: HTTP ${res.status}`);
+    }
+    return data as T;
+  }
+
+  listUsers(): Promise<{ users: ManagedUser[] }> {
+    return this.request("GET", "/users");
+  }
+
+  createUser(input: { username: string; password: string; role: Role }): Promise<{ user: ManagedUser }> {
+    return this.request("POST", "/users", input);
+  }
+
+  deleteUser(username: string): Promise<{ ok: true }> {
+    return this.request("DELETE", `/users/${encodeURIComponent(username)}`);
+  }
+
+  setPassword(username: string, password: string): Promise<{ ok: true }> {
+    return this.request("PUT", `/users/${encodeURIComponent(username)}/password`, { password });
+  }
+}
+
+export interface AuthStatus {
+  needsSetup: boolean;
+}
+
+/** Unauthenticated helpers for first-run setup. */
+export async function getAuthStatus(baseUrl = ""): Promise<AuthStatus> {
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/auth/status`);
+  if (!res.ok) {
+    throw new Error(`auth status failed: HTTP ${res.status}`);
+  }
+  return (await res.json()) as AuthStatus;
+}
+
+export async function createFirstAdmin(
+  input: { username: string; password: string },
+  baseUrl = "",
+): Promise<void> {
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/setup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new Error(typeof data.error === "string" ? data.error : `setup failed: HTTP ${res.status}`);
+  }
 }
 
 export interface SearchResult3 {

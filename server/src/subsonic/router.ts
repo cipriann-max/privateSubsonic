@@ -2,12 +2,9 @@ import type { Request, Response } from "express";
 import { Router } from "express";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import {
-  extractAuthParams,
-  SUBSONIC_ERROR,
-  verifyCredentials,
-  type SubsonicError,
-} from "./protocol.js";
+import { SUBSONIC_ERROR, type SubsonicError } from "./protocol.js";
+import { authenticate } from "../auth.js";
+import type { User } from "../users.js";
 import {
   albumChildAttrs,
   artistChildAttrs,
@@ -27,22 +24,20 @@ import type { Provider } from "./types.js";
 
 interface ReqContext {
   provider: Provider;
+  /** The authenticated user for this request (resolved from the users table). */
+  user: User;
 }
 
 type AuthedRequest = Request;
 
 function authOrError(handler: (req: AuthedRequest, res: Response, ctx: ReqContext) => Promise<void> | void) {
   return async (req: AuthedRequest, res: Response) => {
-    const params = extractAuthParams(req.query, req.body, req.headers);
-    const result = verifyCredentials(params, {
-      username: config.adminUser,
-      password: config.adminPassword,
-    });
-    if (!result.ok) {
-      sendError(res, req as never, result.error);
+    const outcome = authenticate(req.query, req.body, req.headers);
+    if (!outcome.ok) {
+      sendError(res, req as never, outcome.error);
       return;
     }
-    const ctx: ReqContext = { provider: getProvider(config.provider) };
+    const ctx: ReqContext = { provider: getProvider(config.provider), user: outcome.user };
     await handler(req, res, ctx);
   };
 }
@@ -63,8 +58,8 @@ export function subsonicRouter(): Router {
   router.get("/ping", ping);
   router.get("/ping.view", ping);
 
-  const getLicense = authOrError((req, res) => {
-    sendOk(res, req, { license: { valid: true, email: config.adminUser, licenseExpires: "2999-12-31T00:00:00Z" } });
+  const getLicense = authOrError((req, res, ctx) => {
+    sendOk(res, req, { license: { valid: true, email: ctx.user.username, licenseExpires: "2999-12-31T00:00:00Z" } });
   });
   router.get("/getLicense", getLicense);
   router.get("/getLicense.view", getLicense);
@@ -137,11 +132,9 @@ export function subsonicRouter(): Router {
   router.get("/getAlbumList2", getAlbumList2);
   router.get("/getAlbumList2.view", getAlbumList2);
 
-  const getArtists = authOrError(async (req, res, _ctx) => {
-    void _ctx;
+  const getArtists = authOrError(async (req, res, ctx) => {
     // Live provider: derive the artist index from a broad search.
-    const provider = getProvider(config.provider);
-    const results = await provider.search("", { artistCount: 100, albumCount: 0, songCount: 0, artistOffset: 0, albumOffset: 0, songOffset: 0 });
+    const results = await ctx.provider.search("", { artistCount: 100, albumCount: 0, songCount: 0, artistOffset: 0, albumOffset: 0, songOffset: 0 });
     const artists = results.artists.map(artistChildAttrs);
     sendOk(res, req, {
       artists: {

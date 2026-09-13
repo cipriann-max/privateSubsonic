@@ -3,7 +3,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// The server serves web/dist in production; in dev, Vite proxies /rest to it.
+// The server serves web/dist in production; in dev, Vite proxies the API
+// surfaces (/rest for Subsonic, /api for management) to the server.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -15,6 +16,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/rest": `http://localhost:${process.env.PORT ?? 3000}`,
+      "/api": `http://localhost:${process.env.PORT ?? 3000}`,
     },
   },
   build: {

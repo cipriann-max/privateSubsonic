@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { getDatabase } from "./db.js";
 import { subsonicRouter } from "./subsonic/router.js";
+import { apiRouter } from "./api.js";
 
 export function createApp() {
   // Touch the database once at boot so bind-mounted volumes are created and
@@ -18,32 +19,51 @@ export function createApp() {
   app.set("trust proxy", 1); // behind Coolify/traefik/nginx
   app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/healthz" } }));
   app.use(compression());
+  // Management API parses JSON bodies (the /rest API uses query strings).
+  app.use(express.json());
 
   // Liveness for Docker/Coolify.
   app.get("/healthz", (_req, res) => {
     res.status(200).json({ ok: true });
   });
 
+  // JSON management API for the web UI (users, first-run setup).
+  app.use("/api", apiRouter());
+
   // The OpenSubsonic API. `.view` suffix routes are registered alongside.
   app.use("/rest", subsonicRouter());
 
-  // Static web player (built by the web workspace). SPA fallback for client
-  // routing; assets and index.html are served only when the build exists.
+  // Static web player (built by the web workspace).
+  //
+  // Only served in production by default. In dev the UI is served by Vite
+  // (web/vite.config.ts proxies /rest and /api here); serving web/dist from
+  // this port too would shadow the live dev UI with a stale build. Override
+  // with SERVE_WEB=true if you want to exercise the built UI locally.
   const webDist = config.webDistDir;
-  if (existsSync(webDist)) {
+  if (config.serveWeb && existsSync(webDist)) {
+    logger.info({ webDist }, "serving built web UI");
     app.use(serveStatic(webDist, { index: "index.html", maxAge: "1h" }));
+    // SPA fallback for client routing; API paths are excluded.
     app.use((req, res, next) => {
-      if (req.method !== "GET" || req.path.startsWith("/rest")) {
+      if (req.method !== "GET" || req.path.startsWith("/rest") || req.path.startsWith("/api")) {
         next();
         return;
       }
       res.sendFile(path.join(webDist, "index.html"));
     });
   } else {
+    if (!config.serveWeb) {
+      logger.info("web UI is served by Vite in dev; this server does not serve web/dist");
+    }
     app.get("/", (_req, res) => {
       res
         .status(200)
-        .send("privateSubsonic API is running. Web player not built — run `npm run build`.");
+        .type("text/plain")
+        .send(
+          config.serveWeb
+            ? "privateSubsonic API is running. Web player not built — run `npm run build`."
+            : "privateSubsonic API is running. In dev the web UI is served by Vite at http://localhost:5173.",
+        );
     });
   }
 
