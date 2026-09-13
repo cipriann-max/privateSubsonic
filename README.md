@@ -10,7 +10,8 @@ Symfonium, hit play, and it plays.
 
 ## What it does
 
-- Queries [archive.org](https://archive.org) live — no catalog database.
+- Queries [archive.org](https://archive.org) live — no catalog database, scoped
+  to music collections (see *Search scope* below).
 - Normalizes responses into artist/album/track shapes.
 - Serves the [Subsonic API](https://www.subsonic.org/pages/api.jsp) so existing
   clients browse it as a normal library.
@@ -108,6 +109,27 @@ getStreamUrl(trackId) -> url
 ```
 
 Then register it in `providers/index.ts`. No plugin loader, no manifest.
+
+### Search scope (why results are music)
+
+Archive.org's default search is full-text across its entire audio dump, which
+surfaces talk radio and random uploads. Searches are constrained to music
+collections — `georgeblood` (Great 78 Project), `etree` (Live Music Archive)
+and `audio_music` — require `mediatype:audio`, exclude podcasts and
+lending-restricted items, and match the `subject`/`creator`/`title` fields
+instead of the whole-text index (`buildSearchQuery` in
+`server/src/subsonic/providers/archive-org.ts`). Items whose only audio file
+runs longer than 30 minutes are treated as DJ mixes / radio shows and hidden.
+
+Cover art is advertised only when an item really contains an operator-supplied
+image; otherwise the web player renders a generated placeholder derived from
+the artist name rather than Archive.org's auto-generated waveform tile.
+
+Archive items keep a lossless original next to generated lossy derivatives of
+the same recording, so each recording is listed once — preferring lossless
+(`flac`, `wav`, …) over lossy and originals over derivatives
+(`selectPreferredAudioFiles`). This is why an album with both `.flac` and
+`.mp3` files does not show every track twice.
 
 ## Scripts
 

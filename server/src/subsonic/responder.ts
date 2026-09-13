@@ -92,6 +92,9 @@ function buildSubsonicXml(
     "@_serverVersion": "0.1.0",
   };
   for (const [key, value] of Object.entries(merged)) {
+    // Optional attributes are expressed as `undefined`; skip them entirely so
+    // the XML builder never emits `key="undefined"` for absent values.
+    if (value === undefined) continue;
     body[`@_${key}`] = value;
   }
   for (const [key, value] of Object.entries(node.children)) {

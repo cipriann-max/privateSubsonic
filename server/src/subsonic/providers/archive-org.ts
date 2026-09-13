@@ -39,12 +39,40 @@ const AUDIO_MIME: Record<string, string> = {
   opus: "audio/opus",
 };
 
+/**
+ * Music-only collections. Archive.org's default search is full-text across its
+ * entire audio dump, which surfaces talk radio, podcasts and random uploads.
+ * Restricting to these collections makes the library actually musical:
+ *   georgeblood — Great 78 Project (pre-1950s 78rpm transfers, jazz-heavy,
+ *                 professionally catalogued artist/title/year metadata)
+ *   etree       — Live Music Archive (trade-friendly live recordings)
+ *   audio_music — umbrella collection that excludes talk/radio/podcasts
+ */
+export const MUSIC_COLLECTIONS = ["georgeblood", "etree", "audio_music"] as const;
+
+/** A lone audio file longer than this is a DJ mix / radio show, not an album. */
+export const MAX_SINGLE_TRACK_SECONDS = 1800;
+
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp"]);
+
+/** Archive.org auto-generates these; they are not real cover art. */
+const AUTO_IMAGE_PATTERN = /^(__ia_thumb|.*_spectrogram|.*_itemimage)/i;
+
+/**
+ * Audio formats in preference order (lossless first). Archive.org keeps a
+ * lossless original alongside generated lossy derivatives of the same
+ * recording, so we must pick one rather than list both.
+ */
+const FORMAT_PREFERENCE = ["flac", "wav", "aac", "opus", "ogg", "oga", "m4a", "mp3"];
+
 interface IaSearchDoc {
   identifier: string;
   title?: string | string[];
   creator?: string | string[];
   date?: string | string[];
   downloads?: number;
+  /** Number of image files in the item (includes the auto-generated tile). */
+  imagecount?: number;
 }
 
 interface IaSearchResponse {
@@ -61,6 +89,8 @@ interface IaFile {
   length?: string | number;
   track?: string | number;
   title?: string;
+  /** "original" | "derivative" | "metadata"; derivative images are generated. */
+  source?: string;
 }
 
 interface IaMetadata {
@@ -117,7 +147,59 @@ export function normalizeTitle(identifier: string, rawTitle: string): string {
   return cleaned.length > 0 ? cleaned : identifier;
 }
 
-function docToAlbum(doc: IaSearchDoc): Album {
+/** True for files that look like a real, operator-supplied cover image. */
+export function isRealCoverFile(file: IaFile): boolean {
+  if (!IMAGE_EXTENSIONS.has(extensionOf(file.name))) return false;
+  if (AUTO_IMAGE_PATTERN.test(file.name)) return false;
+  // Derivative images are auto-generated per-track artwork (spectrograms,
+  // waveform tiles); only an explicit item image counts.
+  if (file.source === "derivative" && !/itemimage/i.test(file.name)) return false;
+  return true;
+}
+
+/** The item id iff the file list contains a real cover; otherwise "". */
+export function coverArtIdFor(identifier: string, files: IaFile[]): string {
+  return files.some(isRealCoverFile) ? identifier : "";
+}
+
+/** Quoted phrase for multi-word terms, bare term otherwise. */
+function fieldTerm(field: string, value: string): string {
+  const escaped = value.replace(/"/g, "");
+  return /\s/.test(escaped) ? `${field}:("${escaped}")` : `${field}:(${escaped})`;
+}
+
+/**
+ * A lone audio file running very long is a DJ mix / radio show, not an album.
+ * Rejecting these keeps them from surfacing as one-track "albums".
+ */
+export function isSingleLongRecording(tracks: Array<{ durationSeconds: number }>): boolean {
+  return tracks.length === 1 && (tracks[0]?.durationSeconds ?? 0) > MAX_SINGLE_TRACK_SECONDS;
+}
+
+/**
+ * Archive.org's default search is full-text across the whole audio dump, so
+ * "jazz" matches radio descriptions and random uploads. Constrain to music
+ * collections and search the fields that actually carry genre/artist/title.
+ */
+export function buildSearchQuery(query: string): string {
+  const q = query.trim();
+  const collections = MUSIC_COLLECTIONS.join(" OR ");
+  const termClause =
+    q.length > 0
+      ? `(${fieldTerm("subject", q)} OR ${fieldTerm("creator", q)} OR ${fieldTerm("title", q)})`
+      : "";
+  return [
+    "mediatype:(audio)",
+    `collection:(${collections})`,
+    "NOT collection:(podcasts)",
+    "NOT access-restricted-item:true",
+    termClause,
+  ]
+    .filter((part) => part.length > 0)
+    .join(" AND ");
+}
+
+function docToAlbum(doc: IaSearchDoc, coverArtId: string): Album {
   const id = doc.identifier;
   const title = normalizeTitle(id, first(doc.title) || id);
   const artist = first(doc.creator) || "Unknown Artist";
@@ -128,7 +210,7 @@ function docToAlbum(doc: IaSearchDoc): Album {
     title,
     artist,
     artistId: artistIdFor(artist),
-    coverArtId: id,
+    coverArtId,
     year: Number.isFinite(year) ? year : 0,
     // Live provider: track count unknown until the item is fetched.
     trackCount: 0,
@@ -140,11 +222,54 @@ export function artistIdFor(artist: string): string {
   return `ar-${artist.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
 }
 
-function filesToTracks(identifier: string, files: IaFile[], fallbackArtist: string, fallbackTitle: string): Track[] {
-  const audioFiles = files.filter((f) => {
-    const ext = extensionOf(f.name);
-    return AUDIO_EXTENSIONS.has(ext);
-  });
+function formatRank(ext: string): number {
+  const idx = FORMAT_PREFERENCE.indexOf(ext);
+  return idx === -1 ? FORMAT_PREFERENCE.length : idx;
+}
+
+/** Preference between two renditions: lossless over lossy, original over derivative. */
+function isPreferredRendition(candidate: IaFile, current: IaFile): boolean {
+  const a = formatRank(extensionOf(candidate.name));
+  const b = formatRank(extensionOf(current.name));
+  if (a !== b) return a < b;
+  return current.source === "derivative" && candidate.source !== "derivative";
+}
+
+/**
+ * Identity of "the same recording". A file and its derivatives share the base
+ * name (`Track.flac` -> `Track.mp3`), so collapsing whitespace/underscores and
+ * dropping the extension maps renditions of one recording to one key.
+ */
+export function trackKeyOf(file: IaFile): string {
+  const base = file.name.replace(/\.[^.]+$/, "");
+  return base.replace(/[_\s]+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * One audio file per recording: collapses lossless+lossy pairs so an album
+ * does not show each track twice. Returns files in the input's relative order.
+ */
+export function selectPreferredAudioFiles(files: IaFile[]): IaFile[] {
+  const byKey = new Map<string, IaFile>();
+  for (const file of files) {
+    if (!AUDIO_EXTENSIONS.has(extensionOf(file.name))) continue;
+    const key = trackKeyOf(file);
+    const existing = byKey.get(key);
+    if (!existing || isPreferredRendition(file, existing)) {
+      byKey.set(key, file);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function filesToTracks(
+  identifier: string,
+  files: IaFile[],
+  fallbackArtist: string,
+  fallbackTitle: string,
+  coverArtId: string,
+): Track[] {
+  const audioFiles = selectPreferredAudioFiles(files);
   // Stable ordering: by explicit track number when present, else by name.
   const sorted = [...audioFiles].sort((a, b) => {
     const ta = typeof a.track === "string" || typeof a.track === "number" ? Number.parseInt(String(a.track), 10) : Number.NaN;
@@ -170,7 +295,7 @@ function filesToTracks(identifier: string, files: IaFile[], fallbackArtist: stri
       streamUrl: itemUrl(identifier, file.name),
       contentType: AUDIO_MIME[suffix] ?? "application/octet-stream",
       size: Number.isFinite(sizeNum) ? sizeNum : 0,
-      coverArtId: identifier,
+      coverArtId,
       suffix,
     };
   });
@@ -183,13 +308,11 @@ export function createArchiveOrgProvider(): Provider {
     async search(query: string, opts: SearchOpts): Promise<SearchResult> {
       const key = `ia:search:${query}:${opts.artistCount}:${opts.albumCount}:${opts.songCount}:${opts.artistOffset}:${opts.albumOffset}:${opts.songOffset}`;
       return cached(key, async () => {
-        const q = query.trim().length > 0 ? query.trim() : "the";
-        // Exclude lending/protected items: their audio returns 401/403, which
-        // makes browsing feel broken. Open items stream freely (verified:
-        // open item streams 206 with Range support).
+        // Constrain by collection (music only) and search metadata fields
+        // rather than Archive's whole-text index. See buildSearchQuery.
         const params = new URLSearchParams({
-          q: `mediatype:(audio) AND (${q}) AND NOT access-restricted-item:true`,
-          "fl[]": ["identifier", "title", "creator", "date", "downloads"],
+          q: buildSearchQuery(query),
+          "fl[]": ["identifier", "title", "creator", "date", "downloads", "imagecount"],
           rows: String(Math.max(opts.artistCount, opts.albumCount, opts.songCount, 1) * 3),
           page: String(1 + Math.floor(Math.max(opts.albumOffset, opts.songOffset, opts.artistOffset) / 50)),
           output: "json",
@@ -198,7 +321,12 @@ export function createArchiveOrgProvider(): Provider {
         const data = await fetchJson<IaSearchResponse>(url);
         const docs = data.response?.docs ?? [];
 
-        const albums: Album[] = docs.map(docToAlbum);
+        // imagecount counts every image including Archive's auto-generated
+        // tile, so >= 2 implies the item carries a real image. The authoritative
+        // per-file check happens in getAlbum.
+        const albums: Album[] = docs.map((doc) =>
+          docToAlbum(doc, (doc.imagecount ?? 0) >= 2 ? doc.identifier : ""),
+        );
         const artistMap = new Map<string, Artist>();
         for (const album of albums) {
           const artistId = album.artistId;
@@ -230,14 +358,22 @@ export function createArchiveOrgProvider(): Provider {
         const artist = first(data.metadata.creator) || "Unknown Artist";
         const date = first(data.metadata.date);
         const year = Number.parseInt(date.slice(0, 4), 10);
-        const tracks = filesToTracks(id, data.files ?? [], artist, title);
+        const files = data.files ?? [];
+        // Only surface a cover when the item really ships an operator image;
+        // otherwise clients render a generated placeholder rather than
+        // Archive.org's auto-generated waveform tile.
+        const coverArtId = coverArtIdFor(id, files);
+        const tracks = filesToTracks(id, files, artist, title, coverArtId);
+        if (isSingleLongRecording(tracks)) {
+          throw new Error(`item is a single long recording, not an album: ${id}`);
+        }
         const duration = tracks.reduce((acc, t) => acc + t.durationSeconds, 0);
         return {
           id,
           title,
           artist,
           artistId: artistIdFor(artist),
-          coverArtId: id,
+          coverArtId,
           year: Number.isFinite(year) ? year : 0,
           trackCount: tracks.length,
           durationSeconds: duration,

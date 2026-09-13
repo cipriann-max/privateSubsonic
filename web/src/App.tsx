@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SubsonicClient, type Album, type Track } from "./lib/subsonic";
+import { artistHue, placeholderInitials } from "./lib/placeholder";
 
 /**
  * Minimal web player: login → search → album → play.
@@ -161,14 +162,7 @@ export default function App() {
               className="flex items-center gap-3 rounded-lg border p-2 text-left hover:bg-accent"
               onClick={() => void openAlbum(album)}
             >
-              {album.coverArt ? (
-                <img
-                  src={client.coverArtUrl(album.coverArt, 80)}
-                  alt=""
-                  className="h-12 w-12 rounded object-cover"
-                  loading="lazy"
-                />
-              ) : null}
+              <AlbumThumb client={client} album={album} />
               <span className="flex min-w-0 flex-col">
                 <span className="truncate font-medium">{album.title}</span>
                 <span className="truncate text-sm text-muted-foreground">{album.artist}</span>
@@ -287,4 +281,34 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Album thumbnail. Uses the real cover when one exists; otherwise renders a
+ * deterministic colored placeholder from the artist name — looks intentional
+ * instead of a broken image or Archive.org's waveform tile.
+ */
+function AlbumThumb({ client, album }: { client: SubsonicClient; album: Album }) {
+  const [failed, setFailed] = useState(false);
+  if (album.coverArt && !failed) {
+    return (
+      <img
+        src={client.coverArtUrl(album.coverArt, 80)}
+        alt=""
+        className="h-12 w-12 rounded object-cover"
+        loading="lazy"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  const hue = artistHue(album.artist);
+  return (
+    <span
+      aria-hidden
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded text-xs font-semibold text-white"
+      style={{ backgroundColor: `hsl(${hue} 45% 42%)` }}
+    >
+      {placeholderInitials(album.artist)}
+    </span>
+  );
 }

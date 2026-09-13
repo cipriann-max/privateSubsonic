@@ -20,6 +20,8 @@ How to work in this codebase. `README.md` covers the what; this covers the how.
 - **Logging** is pino (`src/logger.ts`). Never `console.*` — ESLint enforces it. Keep archive.org failures at `warn`/`debug`; they are common and non-fatal.
 - **Auth**: all `/rest/*` handlers go through `authOrError` in `src/subsonic/router.ts`. Never add a route that bypasses `verifyCredentials` (the health endpoints live outside `/rest`).
 - **Provider rule**: one interface, one implementation per source. Live in `src/subsonic/providers/<provider-id>.ts`, export `{ id, search, getAlbum, getStreamUrl }`, register in `providers/index.ts`. Do **not** build plugin loaders, manifests, or registries — a new provider is one import + one case. Track ids are `"<itemId>/<fileName>"`; cover-art pseudo-ids use the `__cover__` file marker.
+- **Search must stay scoped to music**: archive.org search is full-text by default and matches talk radio and random uploads. Always build queries via `buildSearchQuery` (`MUSIC_COLLECTIONS` + `mediatype:audio` + `NOT collection:podcasts`, matching `subject`/`creator`/`title`). Never search the whole-text index. Advertise cover art only when a real image file exists (`coverArtIdFor`); items whose only audio file exceeds `MAX_SINGLE_TRACK_SECONDS` are DJ mixes/radio and are rejected in `getAlbum`.
+- **One track per recording**: archive items carry a lossless original plus generated lossy derivatives of the same audio. `filesToTracks` goes through `selectPreferredAudioFiles` (lossless before lossy, original before derivative) so albums never list a song twice. If you add formats, extend `FORMAT_PREFERENCE`; never render a variant per file.
 - **No catalog DB in v0.1.** All catalog data is live from the provider through the LRU+TTL cache (`src/cache.ts`, `cached()` helper). Cache keys are prefixed per provider (`ia:…`). Do not persist catalog data to SQLite; `src/db.ts` exists only so later versions have the handle.
 - **XML is not optional.** Every Subsonic endpoint must respond correctly for both `f=json` and `f=xml` (default). Use the helpers in `src/subsonic/responder.ts` (`sendOk`/`sendError` and the `*ChildAttrs` converters) instead of hand-building payloads.
 - **Streaming** goes through `src/stream.ts` (proxy with Range support). Never redirect clients to archive.org URLs and never cache audio bytes.
@@ -51,3 +53,9 @@ How to work in this codebase. `README.md` covers the what; this covers the how.
 - `getAlbumList2` maps list types onto search queries (`newest`→"the", etc.).
   This is a placeholder; refine later with real sort support.
 - `getArtists` returns a flat "#" index — fine for clients, not a real index.
+- Search results are albums only (the provider returns no tracks/songs yet);
+  `search3` song results stay empty until album-expansion is implemented.
+- Cover-art availability comes from `imagecount` at search time and the file
+  list at album time; both are heuristics over messy metadata.
+- The web placeholder helper (`web/src/lib/placeholder.ts`) has no unit tests —
+  web has no vitest setup. Keep it pure if it grows.
